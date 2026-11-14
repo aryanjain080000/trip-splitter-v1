@@ -65,23 +65,23 @@ button,input,select{font:inherit}button{cursor:pointer}.app{max-width:1180px;mar
 
     <div class="stack">
       <section class="card">
-        <div class="section-head"><h2>Balances</h2><span>Net position after all expenses</span></div>
+        <div class="section-head"><h2>Total expenditure by person</h2><span>Each person’s share of trip expenses</span></div>
         <div class="summary-grid">
-          <div class="stat"><small>Total spent</small><strong id="totalSpent">₹0</strong></div>
+          <div class="stat"><small>Total trip expenditure</small><strong id="totalSpent">₹0</strong></div>
           <div class="stat"><small>Expenses</small><strong id="totalExpenses">0</strong></div>
           <div class="stat"><small>People</small><strong id="totalPeople">0</strong></div>
         </div>
-        <div class="person-spend-section">
-          <div class="section-head"><h2>Total expenditure by person</h2><span>Each person’s allocated expenses</span></div>
-          <div class="person-spend-list" id="personSpendList"></div>
-        </div>
-        <div class="balance-list" id="balanceList"></div>
+        <div class="person-spend-list" id="personSpendList"></div>
       </section>
 
       <section class="card">
-        <div class="section-head"><h2>Settle up</h2><span>Netted to fewer payments</span></div>
-        <div class="settlement-list" id="settlementList"></div>
-        <div class="note" style="margin-top:12px">Positive balance means the person should receive money. Negative balance means they owe money.</div>
+        <div class="section-head"><h2>Balances</h2><span>Who owes and who gets back</span></div>
+        <div class="balance-list" id="balanceList"></div>
+        <div class="person-spend-section">
+          <div class="section-head"><h2>Who pays whom</h2><span>Suggested settlements</span></div>
+          <div class="settlement-list" id="settlementList"></div>
+        </div>
+        <div class="note" style="margin-top:12px">“Gets back” means someone paid more than their share. “Owes” means their share is higher than what they paid. The settlement list shows exactly who should pay whom.</div>
       </section>
     </div>
   </div>
@@ -109,9 +109,14 @@ const money = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFract
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const initials = name => String(name || '').trim().split(/\s+/).map(x => x[0]).join('').slice(0, 2).toUpperCase();
 const localKey = 'tripSplitterLocalFallback';
+const lastTripKey = 'tripSplitterLastActiveTrip';
 let db = null;
 let trips = {};
-let activeTripId = LEGACY_TRIP_ID;
+let activeTripId = localStorage.getItem(lastTripKey) || LEGACY_TRIP_ID;
+
+function rememberActiveTrip() {
+  try { localStorage.setItem(lastTripKey, activeTripId); } catch (e) { console.warn('Could not remember selected trip', e); }
+}
 let unsubscribeTripIndex = null;
 let unsubscribeActiveTrip = null;
 let subscribedTripId = null;
@@ -142,7 +147,7 @@ function fallbackLoad() {
     const saved = JSON.parse(localStorage.getItem(localKey));
     if (saved?.trips) {
       trips = saved.trips;
-      activeTripId = saved.activeTripId || Object.keys(trips)[0] || LEGACY_TRIP_ID;
+      activeTripId = saved.activeTripId || localStorage.getItem(lastTripKey) || Object.keys(trips)[0] || LEGACY_TRIP_ID;
     } else if (saved) {
       // Migrate the previous single-trip local fallback format.
       const people = Object.fromEntries((saved.people || []).map(p => [p.id, { name: p.name }]));
@@ -150,10 +155,12 @@ function fallbackLoad() {
         title: e.title, amount: e.amount, payerId: e.payerId, shares: e.shares, createdAt: e.createdAt
       }]));
       trips = { [LEGACY_TRIP_ID]: { groupName: saved.groupName || '', people, expenses } };
-      activeTripId = LEGACY_TRIP_ID;
+      activeTripId = localStorage.getItem(lastTripKey) || LEGACY_TRIP_ID;
     }
   } catch (e) { console.warn('Could not load local fallback data', e); }
+  if (!trips[activeTripId]) activeTripId = Object.keys(trips)[0] || LEGACY_TRIP_ID;
   if (!trips[activeTripId]) trips[activeTripId] = { groupName: '', people: {}, expenses: {} };
+  rememberActiveTrip();
   loadActiveTrip();
   renderTripSelector();
 }
@@ -274,6 +281,7 @@ async function addTrip() {
       await set(newTripRef, newTrip);
       await set(ref(db, `tripIndex/${newTripRef.key}`), { groupName: name, createdAt: newTrip.createdAt });
       activeTripId = newTripRef.key;
+      rememberActiveTrip();
       trips[activeTripId] = { groupName: name, createdAt: newTrip.createdAt };
       $('participantList').innerHTML = '';
       clearExpenseForm();
@@ -285,6 +293,7 @@ async function addTrip() {
       const id = 'local_trip_' + Date.now();
       trips[id] = { groupName: name, people: {}, expenses: {}, createdAt: Date.now() };
       activeTripId = id;
+      rememberActiveTrip();
       $('participantList').innerHTML = '';
       clearExpenseForm();
       loadActiveTrip();
@@ -434,11 +443,13 @@ async function switchTrip(id) {
   if (localMode) {
     fallbackSave(); // persist the trip being left before changing IDs
     activeTripId = id;
+    rememberActiveTrip();
     $('participantList').innerHTML = '';
     clearExpenseForm();
     loadActiveTrip();
   } else {
     activeTripId = id;
+    rememberActiveTrip();
     $('participantList').innerHTML = '';
     clearExpenseForm();
     subscribeToActiveTrip();
@@ -501,6 +512,7 @@ async function init() {
       const tripIds = Object.keys(trips);
       if (!tripIds.length) return;
       if (!trips[activeTripId]) activeTripId = trips[LEGACY_TRIP_ID] ? LEGACY_TRIP_ID : tripIds[0];
+      rememberActiveTrip();
       renderTripSelector();
       subscribeToActiveTrip();
     }, err => {
